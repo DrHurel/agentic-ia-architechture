@@ -1,0 +1,38 @@
+# Core dependencies
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Kafka
+kafka-python>=2.0.2
+confluent-kafka>=2.3.0
+
+# LLM - Llama integration
+llama-cpp-python>=0.2.27
+httpx>=0.25.0
+
+# Async support
+aiofiles>=23.2.1
+
+# API & Web
+fastapi>=0.109.0
+uvicorn>=0.25.0
+
+# Logging & Monitoring
+structlog>=24.1.0
+prometheus-client>=0.19.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+
+# Code quality tools (for Code Quality Analyser agent)
+pylint>=3.0.0
+black>=24.1.0
+isort>=5.13.0
+mypy>=1.8.0
+bandit>=1.7.0
+
+# Utilities
+python-dotenv>=1.0.0
+tenacity>=8.2.0

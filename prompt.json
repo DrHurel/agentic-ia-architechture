@@ -1,0 +1,9 @@
+{
+    "tecknical-stack": {
+        "language": "python",
+        "deployment": "docker compose",
+        "model": "Llama (local)",
+        "principles": "SOLID"
+    },
+    "task": "Implement the architecture provided in the plantuml diagram"
+}
