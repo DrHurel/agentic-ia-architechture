@@ -1,0 +1,91 @@
+@startuml
+skinparam shadowing false
+skinparam monochrome true
+skinparam packageStyle rectangle
+
+title Architecture Système Agentique (IA)
+
+' --- IMAGE 1: PROMPT ANALYSER & INTERFACE ---
+
+package "VSCODE INTERFACE" {
+    [PO/PM Input] as PO_Input
+    [User Feedback] as Feedback
+}
+
+package "Prompt analyser & task provider" {
+    [Result Interpretor] as RI
+    [task Formulator\n(Transform NL -> PDL)] as TF
+    [Rule Enforcer] as RE
+    [task Scheduler] as TS
+}
+
+' --- BRIDGE: KAFKA ---
+queue "Kafka" as kafka <<send task to proper channel>>
+
+' --- IMAGE 2: AGENT WORKFORCE & OS API ---
+
+package "Message Bus" {
+    [Message Bus] as MB
+}
+
+package "Agent work force" {
+    [CI/CD] as Agent_CICD
+    [Code Quality\nAnalyser] as Agent_QA
+    [Code Writer] as Agent_Writer
+    [Architect] as Agent_Arch
+    [Tester\nWhiteBox] as Agent_TWB
+    [Tester\nBlackBox] as Agent_TBB
+}
+
+package "OS / VSCODE API" {
+    [R Access] as R_Acc
+    [Write Access] as W_Acc
+    [Cmd Access] as C_Acc
+}
+
+' --- RELATIONS IMAGE 1 ---
+
+PO_Input --> TF
+TF -down-> RE : ask for validation
+RE -up-> TF : Reject Task\nand ask for amendment
+RE -down-> TS : send task to scheduling
+RI -right-> TF
+RI -down-> TS : complete already\nexisting task
+
+TS -down-> kafka
+
+' --- RELATIONS ENTRE LES DEUX IMAGES ---
+
+kafka -down-> MB
+MB -up-> RI : (Result return flow)
+
+' --- RELATIONS IMAGE 2 ---
+
+MB -down-> Agent_CICD
+MB -down-> Agent_QA
+MB -down-> Agent_Writer
+MB -down-> Agent_Arch
+MB -down-> Agent_TWB
+MB -down-> Agent_TBB
+
+Agent_CICD -up-> MB
+Agent_QA -up-> MB
+Agent_Writer -up-> MB
+Agent_Arch -up-> MB
+Agent_TWB -up-> MB
+Agent_TBB -up-> MB
+
+' Liens vers OS/API
+Agent_CICD --> C_Acc
+Agent_QA --> R_Acc
+Agent_Writer --> R_Acc
+Agent_Writer --> W_Acc
+Agent_Arch --> R_Acc
+Agent_TWB --> R_Acc
+Agent_TWB --> C_Acc
+Agent_TBB --> C_Acc
+
+' Retour vers l'utilisateur
+MB -up-> Feedback
+
+@enduml
