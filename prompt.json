@@ -6,4 +6,5 @@
         "principles": "SOLID"
     },
     "task": "Implement the architecture provided in the plantuml diagram"
-}
+}docker compose down && docker compose up -d --build
+python client/agentic_client.py --interactive "Create a Python web scraper"

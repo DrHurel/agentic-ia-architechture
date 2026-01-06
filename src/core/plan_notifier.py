@@ -273,6 +273,115 @@ class PlanNotifier:
                     summary[key] = value
         return summary
     
+    async def notify_operation(
+        self,
+        project_id: str,
+        operation: str,
+        details: str,
+        level: str = "info"  # info, warning, debug
+    ) -> None:
+        """
+        Notify clients about a system operation.
+        
+        Operations include:
+        - llm_call: Calling LLM for generation
+        - planning: Planning architecture or tasks
+        - analyzing: Analyzing failure or output
+        - generating: Generating fix or retry tasks
+        - writing_file: Writing a file
+        - running_test: Running tests
+        - validating: Validating code quality
+        """
+        if self._broadcast_callback:
+            await self._broadcast_callback({
+                "type": "operation",
+                "project_id": project_id,
+                "operation": operation,
+                "details": details,
+                "level": level
+            })
+    
+    async def notify_file_operation(
+        self,
+        project_id: str,
+        action: str,  # create, modify, delete
+        file_path: str,
+        size: Optional[int] = None
+    ) -> None:
+        """Notify clients about a file operation."""
+        if self._broadcast_callback:
+            await self._broadcast_callback({
+                "type": "file_operation",
+                "project_id": project_id,
+                "action": action,
+                "file_path": file_path,
+                "size": size
+            })
+    
+    async def notify_llm_call(
+        self,
+        project_id: str,
+        purpose: str,  # e.g., "Planning architecture", "Generating code"
+        model: Optional[str] = None
+    ) -> None:
+        """Notify clients that an LLM call is being made."""
+        if self._broadcast_callback:
+            await self._broadcast_callback({
+                "type": "llm_call",
+                "project_id": project_id,
+                "purpose": purpose,
+                "model": model
+            })
+    
+    async def notify_agent_processing(
+        self,
+        project_id: str,
+        agent_type: str,
+        action: str,  # e.g., "Generating code", "Running tests"
+        target: Optional[str] = None  # e.g., file path
+    ) -> None:
+        """Notify clients that an agent is processing something."""
+        if self._broadcast_callback:
+            await self._broadcast_callback({
+                "type": "agent_processing",
+                "project_id": project_id,
+                "agent_type": agent_type,
+                "action": action,
+                "target": target
+            })
+    
+    async def notify_analysis(
+        self,
+        project_id: str,
+        analysis_type: str,  # e.g., "failure_analysis", "code_review"
+        summary: str
+    ) -> None:
+        """Notify clients about an analysis being performed."""
+        if self._broadcast_callback:
+            await self._broadcast_callback({
+                "type": "analysis",
+                "project_id": project_id,
+                "analysis_type": analysis_type,
+                "summary": summary
+            })
+    
+    async def notify_retry_scheduled(
+        self,
+        project_id: str,
+        original_task: str,
+        fix_task: str,
+        reason: str
+    ) -> None:
+        """Notify clients that a retry has been scheduled after a fix."""
+        if self._broadcast_callback:
+            await self._broadcast_callback({
+                "type": "retry_scheduled",
+                "project_id": project_id,
+                "original_task": original_task,
+                "fix_task": fix_task,
+                "reason": reason
+            })
+    
     def cleanup(self, project_id: str) -> None:
         """Clean up plan data for a completed project."""
         self._current_plans.pop(project_id, None)

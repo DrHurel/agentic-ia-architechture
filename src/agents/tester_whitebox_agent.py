@@ -62,7 +62,17 @@ Test types:
         )
         
         payload = task.payload
-        action = payload.get("action", "create_tests")
+        action = payload.get("action", "")
+        
+        # Auto-detect action from task title/description if not specified
+        if not action:
+            task_text = f"{task.title} {task.description}".lower()
+            if any(kw in task_text for kw in ["run test", "run existing", "execute test", "run pytest", "run unit"]):
+                action = "run_tests"
+            elif any(kw in task_text for kw in ["coverage", "analyze coverage"]):
+                action = "coverage"
+            else:
+                action = "create_tests"
         
         if action == "create_tests":
             return await self._create_tests(task)
