@@ -11,6 +11,7 @@ from src.core.config import AppSettings
 from src.core.interfaces import Task, TaskResult, TaskStatus
 from src.infrastructure.message_bus import MessageBus, Topics
 from src.infrastructure.llm_client import LlamaClient
+from src.infrastructure.os_access import FileReader
 
 from .task_formulator import TaskFormulator
 from .rule_enforcer import RuleEnforcer
@@ -34,6 +35,7 @@ class PromptAnalyserService(BaseService):
         # Will be initialized in _on_start
         self._message_bus: MessageBus = None
         self._llm_client: LlamaClient = None
+        self._file_reader: FileReader = None
         self._task_formulator: TaskFormulator = None
         self._rule_enforcer: RuleEnforcer = None
         self._task_scheduler: TaskScheduler = None
@@ -44,6 +46,9 @@ class PromptAnalyserService(BaseService):
         # Initialize LLM client
         self._llm_client = LlamaClient(self._settings.llama)
         await self._llm_client.connect()
+        
+        # Initialize file reader for project orchestrator
+        self._file_reader = FileReader(self._settings.service.workspace_path)
         
         # Initialize message bus
         self._message_bus = MessageBus(self._settings.kafka, "prompt-analyser")

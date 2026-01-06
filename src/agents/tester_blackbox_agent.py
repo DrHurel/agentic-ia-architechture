@@ -53,6 +53,13 @@ Test types:
     
     async def _do_execute(self, task: Task) -> TaskResult:
         """Execute a black-box testing task."""
+        # Set context for command approval
+        self._command_executor.set_context(
+            agent_type=str(self.agent_type),
+            task_id=task.id,
+            project_id=task.payload.get("project_id")
+        )
+        
         payload = task.payload
         action = payload.get("action", "create_tests")
         
@@ -188,7 +195,10 @@ Respond with JSON:
         test_command = payload.get("command", "pytest tests/e2e/ -v")
         
         try:
-            stdout, stderr, return_code = await self._command_executor.execute_command(test_command)
+            stdout, stderr, return_code = await self._command_executor.execute_command(
+                test_command,
+                reason=f"Running black-box tests: {task.title}"
+            )
             
             success = return_code == 0
             

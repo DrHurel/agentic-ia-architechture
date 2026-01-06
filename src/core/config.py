@@ -22,10 +22,10 @@ class KafkaSettings(BaseSettings):
 class LlamaSettings(BaseSettings):
     """Ollama LLM configuration."""
     api_url: str = Field(default="http://localhost:11434")
-    model: str = Field(default="llama3.2:1b")
-    context_size: int = Field(default=4096)
-    temperature: float = Field(default=0.7)
-    max_tokens: int = Field(default=2048)
+    model: str = Field(default="qwen2.5-coder:7b")  # Powerful coding model
+    context_size: int = Field(default=8192)  # Larger context for complex tasks
+    temperature: float = Field(default=0.2)  # Lower for more consistent code
+    max_tokens: int = Field(default=8192)  # Increased for larger code outputs
     
     class Config:
         env_prefix = "LLAMA_"

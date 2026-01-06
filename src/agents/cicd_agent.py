@@ -53,6 +53,13 @@ Supported platforms:
     
     async def _do_execute(self, task: Task) -> TaskResult:
         """Execute a CI/CD task."""
+        # Set context for command approval
+        self._command_executor.set_context(
+            agent_type=str(self.agent_type),
+            task_id=task.id,
+            project_id=task.payload.get("project_id")
+        )
+        
         payload = task.payload
         action = payload.get("action", "create_pipeline")
         
@@ -134,7 +141,10 @@ Respond with JSON:
         build_command = payload.get("command", "docker build -t app .")
         
         try:
-            stdout, stderr, return_code = await self._command_executor.execute_command(build_command)
+            stdout, stderr, return_code = await self._command_executor.execute_command(
+                build_command,
+                reason=f"Running build command for task: {task.title}"
+            )
             
             success = return_code == 0
             
@@ -167,7 +177,10 @@ Respond with JSON:
         self._logger.info("Starting deployment", environment=environment)
         
         try:
-            stdout, stderr, return_code = await self._command_executor.execute_command(deploy_command)
+            stdout, stderr, return_code = await self._command_executor.execute_command(
+                deploy_command,
+                reason=f"Deploying to {environment} environment"
+            )
             
             success = return_code == 0
             

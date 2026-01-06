@@ -71,10 +71,16 @@ Severity levels:
         file_path = payload.get("file_path", "")
         
         if not file_path:
+            # Try to infer file_path from task description if not provided
+            self._logger.warning(
+                "file_path not provided in task payload",
+                task_id=task.id,
+                title=task.title
+            )
             return TaskResult(
                 task_id=task.id,
                 status=TaskStatus.FAILED,
-                error="file_path is required for code analysis"
+                error="file_path is required for code analysis. Ensure code_quality tasks have a file_path in their payload and depend on the code_writer task that creates the file."
             )
         
         try:

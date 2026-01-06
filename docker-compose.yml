@@ -41,7 +41,8 @@ services:
       timeout: 5s
       retries: 5
 
-  # Llama Local Model Server (Ollama - easier setup)
+  # Llama Local Model Server (Ollama)
+  # GPU support: see Devtools/enable_gpu.sh for setup instructions
   ollama:
     image: ollama/ollama:latest
     container_name: ollama-server
@@ -57,14 +58,16 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-    # Uncomment below for GPU support
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+    # GPU SUPPORT ENABLED
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
 
   # Prompt Analyser Service
   prompt-analyser:

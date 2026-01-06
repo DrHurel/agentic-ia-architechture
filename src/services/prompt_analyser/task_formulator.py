@@ -37,7 +37,8 @@ TASK_SCHEMA = {
                         "type": "array",
                         "items": {"type": "integer"}
                     },
-                    "payload": {"type": "object"}
+                    "payload": {"type": "object"},
+                    "file_path": {"type": "string"}  # Output file path for code_writer tasks
                 },
                 "required": ["title", "description", "agent_type"]
             }
@@ -70,6 +71,11 @@ Rules:
 3. Set dependencies between tasks when order matters
 4. Provide clear descriptions with enough context
 5. Include relevant payload data (file paths, specifications, etc.)
+6. IMPORTANT: For code_writer tasks, always specify the exact output file_path (e.g., /workspace/main.py)
+7. IMPORTANT: For code_quality tasks, always specify the file_path of the file to analyze (must be a file created by a previous code_writer task)
+8. Only create files that are actual deliverables - no intermediate or debug files
+9. Use meaningful, descriptive file names that reflect the module purpose
+10. code_quality tasks MUST depend on the code_writer task that creates the file they analyze
 """
     
     def __init__(self, llm_client: ILLMClient):
@@ -80,20 +86,27 @@ Rules:
         """Transform natural language input to structured tasks."""
         self._logger.info("Formulating tasks", input_length=len(natural_language_input))
         
-        prompt = f"""Analyze this request and create a list of tasks:
+        prompt = f"""Create tasks for this request: {natural_language_input}
 
-Request: {natural_language_input}
+Available agents: architect, code_writer, code_quality, tester_whitebox, tester_blackbox, cicd
 
-Create specific, actionable tasks that can be executed by the agents.
-Return a JSON object with a "tasks" array."""
+IMPORTANT RULES:
+- For code_writer tasks, you MUST include "file_path" with the exact output path (e.g., "/workspace/calculator.py")
+- Only create files that are actual project deliverables
+- Use descriptive file names that match the feature (not the task name)
+- One task should produce ONE file, not multiple
+
+Return JSON with tasks array. Example:
+{{"tasks": [{{"title": "Create main entry point", "description": "Create the main.py with program entry", "agent_type": "code_writer", "priority": "medium", "file_path": "/workspace/main.py"}}]}}"""
         
         try:
             result = await self._llm_client.generate_structured(prompt, TASK_SCHEMA)
+            self._logger.debug("LLM result", result=result)
             tasks = self._parse_tasks(result, natural_language_input)
             self._logger.info("Tasks formulated", count=len(tasks))
             return tasks
         except Exception as e:
-            self._logger.error("Failed to formulate tasks", error=str(e))
+            self._logger.error("Failed to formulate tasks, using fallback", error=str(e))
             # Fallback: create a single generic task
             return [self._create_fallback_task(natural_language_input)]
     
@@ -122,13 +135,34 @@ Return a JSON object with a "tasks" array."""
             except ValueError:
                 priority = TaskPriority.MEDIUM
             
+            # Build payload - include file_path if specified
+            payload = raw_task.get("payload", {})
+            if raw_task.get("file_path"):
+                payload["file_path"] = raw_task["file_path"]
+            
+            # For code_writer tasks, ensure file_path exists
+            if agent_type == AgentType.CODE_WRITER and not payload.get("file_path"):
+                # Generate a file path from the task title
+                generated_path = self._generate_file_path(raw_task.get("title", ""), raw_task.get("description", ""))
+                if generated_path:
+                    payload["file_path"] = generated_path
+                    self._logger.info("Generated file_path for task", title=raw_task.get("title"), path=generated_path)
+            
+            # Validate: code_quality tasks require file_path
+            if agent_type == AgentType.CODE_QUALITY and not payload.get("file_path"):
+                self._logger.warning(
+                    "code_quality task missing file_path, skipping",
+                    task_title=raw_task.get("title")
+                )
+                continue  # Skip invalid code_quality tasks
+            
             task = Task(
                 id=task_id,
                 title=raw_task.get("title", f"Task {idx + 1}"),
                 description=raw_task.get("description") or raw_task.get("title", original_input),
                 agent_type=agent_type,
                 priority=priority,
-                payload=raw_task.get("payload", {}),
+                payload=payload,
                 metadata={
                     "original_input": original_input,
                     "task_index": idx,
@@ -148,13 +182,74 @@ Return a JSON object with a "tasks" array."""
         
         return tasks
     
+    def _generate_file_path(self, title: str, description: str) -> str:
+        """Generate a sensible file path from task title and description."""
+        import re
+        
+        text = f"{title} {description}".lower()
+        
+        # Check for explicit file paths first
+        path_match = re.search(r'/workspace/[\w/.-]+\.\w+', text)
+        if path_match:
+            return path_match.group(0)
+        
+        # Map common patterns to standard filenames
+        filename_patterns = {
+            ('main', 'entry'): 'main.py',
+            ('scraper',): 'scraper.py',
+            ('parser',): 'parser.py',
+            ('utils', 'utility', 'helper'): 'utils.py',
+            ('config', 'settings'): 'config.py',
+            ('test', 'scraper'): 'test_scraper.py',
+            ('test', 'parser'): 'test_parser.py',
+            ('test', 'utils'): 'test_utils.py',
+            ('unit test', 'scraper'): 'test_scraper.py',
+            ('unit test', 'parser'): 'test_parser.py',
+            ('integration test',): 'test_integration.py',
+        }
+        
+        for keywords, filename in filename_patterns.items():
+            if all(kw in text for kw in keywords):
+                return f"/workspace/{filename}"
+        
+        # Extract meaningful words for filename
+        # Remove common action/filler words
+        clean = text
+        for word in ['create', 'write', 'implement', 'build', 'add', 'make', 
+                     'the', 'a', 'an', 'for', 'with', 'logic', 'code', 'file']:
+            clean = re.sub(rf'\b{word}\b', '', clean)
+        
+        # Extract remaining meaningful words
+        words = re.findall(r'\b[a-z]{3,}\b', clean)
+        
+        if words:
+            # Take up to 3 most meaningful words
+            meaningful = [w for w in words if w not in ['task', 'new', 'based']][:3]
+            if meaningful:
+                filename = '_'.join(meaningful)
+                return f"/workspace/{filename}.py"
+        
+        # Last resort
+        return "/workspace/output.py"
+    
     def _create_fallback_task(self, input_text: str) -> Task:
         """Create a fallback task when parsing fails."""
+        # Detect likely agent type from keywords
+        text_lower = input_text.lower()
+        if any(kw in text_lower for kw in ['write', 'create', 'code', 'script', 'function', 'class', '.py']):
+            agent_type = AgentType.CODE_WRITER
+        elif any(kw in text_lower for kw in ['test', 'unittest', 'pytest']):
+            agent_type = AgentType.TESTER_WHITEBOX
+        elif any(kw in text_lower for kw in ['design', 'architect', 'structure']):
+            agent_type = AgentType.ARCHITECT
+        else:
+            agent_type = AgentType.CODE_WRITER  # Default to code writer
+            
         return Task(
             id=str(uuid.uuid4()),
             title="Process Request",
             description=input_text,
-            agent_type=AgentType.ARCHITECT,  # Architect can analyze and delegate
+            agent_type=agent_type,
             priority=TaskPriority.MEDIUM,
             metadata={"fallback": True}
         )

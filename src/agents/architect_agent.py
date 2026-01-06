@@ -1,6 +1,7 @@
 """
 Architect Agent - Designs system architecture and technical specifications.
 Has Read access to analyze existing code structure.
+Has Command access for scaffolding projects (executed on client).
 """
 
 from typing import Optional
@@ -9,7 +10,7 @@ import structlog
 from src.core.base import BaseAgent
 from src.core.interfaces import (
     AgentType, Task, TaskResult, TaskStatus,
-    IMessagePublisher, ILLMClient, IFileReader
+    IMessagePublisher, ILLMClient, IFileReader, ICommandExecutor
 )
 
 
@@ -19,7 +20,7 @@ logger = structlog.get_logger()
 class ArchitectAgent(BaseAgent):
     """
     Agent responsible for system architecture and design.
-    Capabilities: Analyze structure, create specs, design patterns.
+    Capabilities: Analyze structure, create specs, design patterns, scaffold projects.
     """
     
     SYSTEM_PROMPT = """You are an expert software architect agent.
@@ -39,16 +40,20 @@ When responding to architecture tasks, provide:
 3. Data flow descriptions
 4. API contracts if applicable
 5. Technology recommendations
+
+You can also scaffold project structures by creating directories and files.
 """
     
     def __init__(
         self,
         message_publisher: IMessagePublisher,
         llm_client: ILLMClient,
-        file_reader: IFileReader
+        file_reader: IFileReader,
+        command_executor: Optional[ICommandExecutor] = None
     ):
         super().__init__(message_publisher, llm_client, "ArchitectAgent")
         self._file_reader = file_reader
+        self._command_executor = command_executor
     
     @property
     def agent_type(self) -> AgentType:
@@ -56,6 +61,14 @@ When responding to architecture tasks, provide:
     
     async def _do_execute(self, task: Task) -> TaskResult:
         """Execute an architecture task."""
+        # Set context for command approval if executor available
+        if self._command_executor:
+            self._command_executor.set_context(
+                agent_type=str(self.agent_type),
+                task_id=task.id,
+                project_id=task.payload.get("project_id")
+            )
+        
         payload = task.payload
         action = payload.get("action", "design")
         
@@ -65,8 +78,117 @@ When responding to architecture tasks, provide:
             return await self._analyze_codebase(task)
         elif action == "review":
             return await self._review_design(task)
+        elif action == "scaffold":
+            return await self._scaffold_project(task)
         else:
             return await self._generic_architecture_task(task)
+    
+    async def _scaffold_project(self, task: Task) -> TaskResult:
+        """
+        Scaffold a project structure by creating directories and files.
+        Uses command execution to create the structure.
+        """
+        if not self._command_executor:
+            return TaskResult(
+                task_id=task.id,
+                status=TaskStatus.FAILED,
+                error="Command executor not available for scaffolding"
+            )
+        
+        payload = task.payload
+        project_structure = payload.get("structure", {})
+        base_path = payload.get("base_path", "/workspace")
+        
+        # If no structure provided, generate one
+        if not project_structure:
+            prompt = f"""Create a project structure for:
+{task.description}
+
+Respond with JSON:
+{{
+    "directories": ["/workspace/src", "/workspace/tests", "/workspace/docs"],
+    "files": [
+        {{"path": "/workspace/README.md", "content": "# Project"}},
+        {{"path": "/workspace/src/__init__.py", "content": ""}}
+    ],
+    "commands": ["pip install -r requirements.txt"]
+}}"""
+            
+            try:
+                project_structure = await self._llm_client.generate_structured(prompt, {
+                    "type": "object",
+                    "properties": {
+                        "directories": {"type": "array", "items": {"type": "string"}},
+                        "files": {"type": "array"},
+                        "commands": {"type": "array", "items": {"type": "string"}}
+                    }
+                })
+            except Exception as e:
+                return TaskResult(
+                    task_id=task.id,
+                    status=TaskStatus.FAILED,
+                    error=f"Failed to generate structure: {str(e)}"
+                )
+        
+        created = []
+        errors = []
+        
+        # Create directories
+        for dir_path in project_structure.get("directories", []):
+            try:
+                _, _, code = await self._command_executor.execute_command(
+                    f"mkdir -p {dir_path}",
+                    reason=f"Creating directory: {dir_path}"
+                )
+                if code == 0:
+                    created.append(f"dir: {dir_path}")
+            except Exception as e:
+                errors.append(f"mkdir {dir_path}: {str(e)}")
+        
+        # Create files
+        for file_info in project_structure.get("files", []):
+            file_path = file_info.get("path", "")
+            content = file_info.get("content", "")
+            try:
+                # Use echo or cat to create file (commands run on client)
+                cmd = f'echo {repr(content)} > {file_path}'
+                _, _, code = await self._command_executor.execute_command(
+                    cmd,
+                    reason=f"Creating file: {file_path}"
+                )
+                if code == 0:
+                    created.append(f"file: {file_path}")
+            except Exception as e:
+                errors.append(f"create {file_path}: {str(e)}")
+        
+        # Run setup commands
+        for cmd in project_structure.get("commands", []):
+            try:
+                _, stderr, code = await self._command_executor.execute_command(
+                    cmd,
+                    reason=f"Running setup command: {cmd}"
+                )
+                if code != 0:
+                    errors.append(f"cmd '{cmd}': {stderr}")
+            except Exception as e:
+                errors.append(f"cmd '{cmd}': {str(e)}")
+        
+        if errors and not created:
+            return TaskResult(
+                task_id=task.id,
+                status=TaskStatus.FAILED,
+                error="; ".join(errors)
+            )
+        
+        return TaskResult(
+            task_id=task.id,
+            status=TaskStatus.COMPLETED,
+            output={
+                "created": created,
+                "errors": errors,
+                "structure": project_structure
+            }
+        )
     
     async def _design_architecture(self, task: Task) -> TaskResult:
         """Design system architecture."""

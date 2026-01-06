@@ -205,7 +205,17 @@ class ICommandExecutor(ABC):
     """Interface for command execution (ISP)."""
     
     @abstractmethod
-    async def execute_command(self, command: str, cwd: Optional[str] = None) -> tuple[str, str, int]:
+    def set_context(self, agent_type: str, task_id: str, project_id: Optional[str] = None) -> None:
+        """Set execution context for approval requests."""
+        pass
+    
+    @abstractmethod
+    async def execute_command(
+        self, 
+        command: str, 
+        cwd: Optional[str] = None,
+        reason: str = "Agent requested command execution"
+    ) -> tuple[str, str, int]:
         """Execute a shell command. Returns (stdout, stderr, return_code)."""
         pass
 

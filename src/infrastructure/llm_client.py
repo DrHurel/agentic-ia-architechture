@@ -77,31 +77,56 @@ class LlamaClient(ILLMClient):
         Generate structured output matching the schema.
         Uses prompt engineering to get JSON output.
         """
-        structured_prompt = f"""You must respond with valid JSON matching this schema:
-{json.dumps(schema, indent=2)}
+        structured_prompt = f"""{prompt}
 
-{prompt}
-
-Respond ONLY with valid JSON, no other text:"""
+Respond with ONLY valid JSON (no markdown, no explanation), matching this schema:
+{json.dumps(schema, indent=2)}"""
         
-        system_prompt = "You are a helpful assistant that always responds with valid JSON."
+        system_prompt = "You are a coding assistant. Always respond with pure JSON only, never markdown code blocks."
         
         response = await self.generate(structured_prompt, system_prompt)
         
         # Try to parse JSON from response
         try:
-            # Clean response - extract JSON if wrapped in other text
+            # Clean response - extract JSON if wrapped
             response = response.strip()
-            if response.startswith("```json"):
-                response = response[7:]
-            if response.startswith("```"):
-                response = response[3:]
-            if response.endswith("```"):
-                response = response[:-3]
+            
+            # Remove markdown code blocks
+            if "```json" in response:
+                response = response.split("```json")[1].split("```")[0]
+            elif "```" in response:
+                parts = response.split("```")
+                for part in parts:
+                    part = part.strip()
+                    if part.startswith("{") or part.startswith("["):
+                        response = part
+                        break
+            
+            # Find JSON in response
+            start_brace = response.find("{")
+            start_bracket = response.find("[")
+            
+            if start_brace >= 0 and (start_bracket < 0 or start_brace < start_bracket):
+                # Find matching closing brace
+                depth = 0
+                for i, c in enumerate(response[start_brace:]):
+                    if c == "{": depth += 1
+                    elif c == "}": depth -= 1
+                    if depth == 0:
+                        response = response[start_brace:start_brace+i+1]
+                        break
+            elif start_bracket >= 0:
+                depth = 0
+                for i, c in enumerate(response[start_bracket:]):
+                    if c == "[": depth += 1
+                    elif c == "]": depth -= 1
+                    if depth == 0:
+                        response = response[start_bracket:start_bracket+i+1]
+                        break
             
             return json.loads(response.strip())
         except json.JSONDecodeError as e:
-            self._logger.error("Failed to parse LLM JSON response", error=str(e), response=response)
+            self._logger.error("Failed to parse LLM JSON response", error=str(e), response=response[:200])
             raise ValueError(f"LLM did not return valid JSON: {e}")
     
     async def health_check(self) -> bool:

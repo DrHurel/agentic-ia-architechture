@@ -54,6 +54,13 @@ Test types:
     
     async def _do_execute(self, task: Task) -> TaskResult:
         """Execute a white-box testing task."""
+        # Set context for command approval
+        self._command_executor.set_context(
+            agent_type=str(self.agent_type),
+            task_id=task.id,
+            project_id=task.payload.get("project_id")
+        )
+        
         payload = task.payload
         action = payload.get("action", "create_tests")
         
@@ -154,7 +161,10 @@ Respond with JSON:
         test_command = payload.get("command", f"pytest {test_path} -v")
         
         try:
-            stdout, stderr, return_code = await self._command_executor.execute_command(test_command)
+            stdout, stderr, return_code = await self._command_executor.execute_command(
+                test_command,
+                reason=f"Running white-box tests: {task.title}"
+            )
             
             success = return_code == 0
             
@@ -187,7 +197,10 @@ Respond with JSON:
         coverage_command = f"pytest {test_path} --cov={source_path} --cov-report=json"
         
         try:
-            stdout, stderr, return_code = await self._command_executor.execute_command(coverage_command)
+            stdout, stderr, return_code = await self._command_executor.execute_command(
+                coverage_command,
+                reason=f"Analyzing test coverage for {source_path}"
+            )
             
             # Parse coverage results
             # Note: In real implementation, would parse coverage.json

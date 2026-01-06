@@ -190,3 +190,19 @@ src/
 ## License
 
 MIT License
+
+
+```bash
+
+# Start a project - system will work until completion
+curl -X POST http://localhost:8000/projects \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Create a Python web scraper that extracts article titles from news websites"}'
+
+# Check status
+curl http://localhost:8000/projects/{project_id}
+
+# Interrupt if needed
+curl -X POST http://localhost:8000/projects/{project_id}/interrupt
+
+```

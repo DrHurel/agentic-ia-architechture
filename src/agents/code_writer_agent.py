@@ -69,11 +69,106 @@ When responding to code tasks, provide:
         else:
             return await self._generic_code_task(task)
     
+    def _extract_file_path(self, task: Task) -> str:
+        """Extract file path from task description or payload."""
+        import re
+        
+        # First check payload - this is the preferred source
+        if task.payload.get("file_path"):
+            path = task.payload["file_path"]
+            # Ensure it starts with /workspace
+            if not path.startswith('/workspace'):
+                path = f"/workspace/{path.lstrip('/')}"
+            return path
+        
+        # Try to extract from description or title
+        text = f"{task.title} {task.description}"
+        
+        # Common patterns for file paths - prefer explicit paths
+        patterns = [
+            r'/workspace/[\w/.-]+\.\w+',  # /workspace/file.py (any extension)
+            r'[\w/]+\.\w{1,4}',  # any file with extension
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                path = match.group(0)
+                # Ensure it starts with /workspace
+                if not path.startswith('/workspace'):
+                    path = f"/workspace/{path.lstrip('/')}"
+                return path
+        
+        # Last resort: generate a meaningful filename from task context
+        # Look for class or module names in the description
+        class_match = re.search(r'class\s+(\w+)', text, re.IGNORECASE)
+        if class_match:
+            return f"/workspace/{class_match.group(1).lower()}.py"
+        
+        func_match = re.search(r'function\s+(\w+)', text, re.IGNORECASE)
+        if func_match:
+            return f"/workspace/{func_match.group(1).lower()}.py"
+        
+        # Extract meaningful name from title using keyword mapping
+        clean_title = task.title.lower()
+        
+        # Map common task patterns to clean filenames
+        filename_mappings = {
+            'unit test': 'test',
+            'unit tests': 'tests',
+            'integration test': 'test_integration',
+            'integration tests': 'tests_integration',
+            'scraper': 'scraper',
+            'parser': 'parser',
+            'web scraper': 'web_scraper',
+            'main entry': 'main',
+            'entry point': 'main',
+            'utility': 'utils',
+            'utilities': 'utils',
+            'helper': 'helpers',
+            'config': 'config',
+            'settings': 'settings',
+        }
+        
+        # Check for common patterns first
+        for pattern, filename in filename_mappings.items():
+            if pattern in clean_title:
+                # Add subject if found (e.g., "parser" from "unit tests for parser")
+                for subject in ['scraper', 'parser', 'utils', 'main', 'config']:
+                    if subject in clean_title and subject != filename:
+                        return f"/workspace/{filename}_{subject}.py"
+                return f"/workspace/{filename}.py"
+        
+        # Fallback: Remove action words and create clean filename
+        for word in ['create', 'write', 'implement', 'build', 'add', 'make', 'the', 'a', 'an', 'for', 'logic', 'with']:
+            clean_title = clean_title.replace(word, ' ')
+        
+        # Create snake_case filename - keep full words, limit to 40 chars
+        safe_name = re.sub(r'[^\w\s]', '', clean_title).strip()
+        safe_name = re.sub(r'\s+', '_', safe_name).strip('_')
+        
+        # Limit length but try to keep complete words
+        if len(safe_name) > 40:
+            parts = safe_name.split('_')
+            safe_name = ''
+            for part in parts:
+                if len(safe_name) + len(part) + 1 <= 40:
+                    safe_name = f"{safe_name}_{part}" if safe_name else part
+                else:
+                    break
+        
+        if not safe_name:
+            safe_name = "output"
+        
+        return f"/workspace/{safe_name}.py"
+
     async def _write_code(self, task: Task) -> TaskResult:
         """Write new code based on the task description."""
         payload = task.payload
-        file_path = payload.get("file_path", "")
+        file_path = self._extract_file_path(task)  # Use extraction
         language = payload.get("language", "python")
+        
+        self._logger.info("Writing code", file_path=file_path, task=task.title)
         
         # Get context from existing files if specified
         context = ""
@@ -85,40 +180,47 @@ When responding to code tasks, provide:
             except Exception as e:
                 self._logger.warning("Could not read context file", file=ctx_file, error=str(e))
         
-        prompt = f"""Write code for the following task:
+        # Get architect plan if available - code writer should follow it
+        architect_plan = payload.get("architect_plan", {})
+        plan_context = ""
+        if architect_plan:
+            plan_context = f"""
+ARCHITECT'S PLAN (you MUST follow this design):
+- Components: {architect_plan.get('components', [])}
+- File Structure: {architect_plan.get('file_structure', {})}
+- Patterns: {architect_plan.get('patterns', [])}
+- Technologies: {architect_plan.get('technologies', [])}
+
+This file should implement part of the above architecture.
+"""
+            # Find this file's specific purpose from the plan
+            for file_info in architect_plan.get("files", []):
+                if file_info.get("path") == file_path:
+                    plan_context += f"\nFile Purpose: {file_info.get('purpose', 'Not specified')}\n"
+                    break
+        
+        prompt = f"""Write {language} code for:
 
 Task: {task.title}
 Description: {task.description}
-Language: {language}
-Target File: {file_path}
+File: {file_path}
+
+{plan_context}
 
 {f'Context from existing files:{context}' if context else ''}
 
-Provide the complete code implementation.
-Respond with JSON:
-{{
-    "code": "the complete code",
-    "imports": ["list of required imports/dependencies"],
-    "explanation": "brief explanation of the implementation"
-}}"""
+Write ONLY the code, no explanations, no markdown, just pure {language} code.
+Follow the architect's plan if provided."""
         
         try:
-            result = await self._llm_client.generate_structured(prompt, {
-                "type": "object",
-                "properties": {
-                    "code": {"type": "string"},
-                    "imports": {"type": "array", "items": {"type": "string"}},
-                    "explanation": {"type": "string"}
-                },
-                "required": ["code"]
-            })
-            
-            code = result.get("code", "")
+            # Get raw code from LLM
+            code = await self._llm_client.generate(prompt)
+            code = self._clean_code_response(code)
             
             # Write the file if path specified
-            if file_path:
+            if file_path and code:
                 await self._file_writer.write_file(file_path, code)
-                self._logger.info("Code written to file", path=file_path)
+                self._logger.info("Code written to file", path=file_path, size=len(code))
             
             return TaskResult(
                 task_id=task.id,
@@ -126,9 +228,8 @@ Respond with JSON:
                 output={
                     "file_path": file_path,
                     "code_length": len(code),
-                    "imports": result.get("imports", []),
-                    "explanation": result.get("explanation", ""),
-                    "suggested_followup": f"Run tests for {file_path}" if file_path else None
+                    "code_written": bool(code),
+                    "followed_architect_plan": bool(architect_plan)
                 }
             )
             
@@ -139,6 +240,43 @@ Respond with JSON:
                 status=TaskStatus.FAILED,
                 error=str(e)
             )
+    
+    def _clean_code_response(self, code: str) -> str:
+        """Clean up code response from LLM."""
+        code = code.strip()
+        
+        # Remove markdown code blocks if present
+        if code.startswith("```python"):
+            code = code[9:]
+        elif code.startswith("```"):
+            code = code[3:]
+        
+        # Check if there's a closing ``` and extract only the code before it
+        if "```" in code:
+            code = code.split("```")[0]
+        
+        # Remove trailing explanatory text after the last function/class
+        lines = code.split('\n')
+        clean_lines = []
+        in_code = True
+        last_code_line = 0
+        
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Check if line looks like code (not pure prose)
+            if stripped and not stripped.startswith('#'):
+                # Check for code-like patterns
+                if any(x in stripped for x in ['def ', 'class ', 'import ', 'from ', 'return ', '=', '(', ')', '[', ']', '{', '}']):
+                    last_code_line = i
+                elif stripped.startswith(('if ', 'else:', 'elif ', 'for ', 'while ', 'try:', 'except', 'finally:', 'with ')):
+                    last_code_line = i
+                elif stripped and not any(c.isalpha() for c in stripped):  # pure symbols/numbers
+                    last_code_line = i
+        
+        # Include all lines up to and including the last code line
+        clean_lines = lines[:last_code_line + 1] if last_code_line > 0 else lines
+        
+        return '\n'.join(clean_lines).strip()
     
     async def _modify_code(self, task: Task) -> TaskResult:
         """Modify existing code."""
@@ -171,26 +309,11 @@ Current code in {file_path}:
 {existing_code}
 ```
 
-Provide the modified code.
-Respond with JSON:
-{{
-    "code": "the complete modified code",
-    "changes": ["list of changes made"],
-    "explanation": "brief explanation of modifications"
-}}"""
+Write ONLY the complete modified code, no explanations, no markdown."""
         
         try:
-            result = await self._llm_client.generate_structured(prompt, {
-                "type": "object",
-                "properties": {
-                    "code": {"type": "string"},
-                    "changes": {"type": "array", "items": {"type": "string"}},
-                    "explanation": {"type": "string"}
-                },
-                "required": ["code"]
-            })
-            
-            modified_code = result.get("code", "")
+            code = await self._llm_client.generate(prompt)
+            modified_code = self._clean_code_response(code)
             await self._file_writer.write_file(file_path, modified_code)
             
             return TaskResult(
@@ -198,8 +321,7 @@ Respond with JSON:
                 status=TaskStatus.COMPLETED,
                 output={
                     "file_path": file_path,
-                    "changes": result.get("changes", []),
-                    "explanation": result.get("explanation", "")
+                    "code_length": len(modified_code)
                 }
             )
             
@@ -243,41 +365,23 @@ Respond with JSON:
     
     async def _generic_code_task(self, task: Task) -> TaskResult:
         """Handle generic code-related tasks."""
-        prompt = f"""You are a code writing agent. Execute this task:
+        # Try to extract file path from task
+        file_path = self._extract_file_path(task)
+        
+        prompt = f"""Write Python code for this task.
 
 Task: {task.title}
-Description: {task.description}
-Payload: {task.payload}
+Details: {task.description}
+Save to: {file_path}
 
-Determine what code needs to be written and provide it.
-Respond with JSON:
-{{
-    "code": "the code to write",
-    "file_path": "suggested file path or null",
-    "explanation": "what this code does"
-}}"""
+Write ONLY the Python code, nothing else. No JSON, no markdown, just pure Python code."""
         
         try:
-            result = await self._llm_client.generate_structured(prompt, {
-                "type": "object",
-                "properties": {
-                    "code": {"type": "string"},
-                    "file_path": {"type": ["string", "null"]},
-                    "explanation": {"type": "string"}
-                }
-            })
-            
-            file_path = result.get("file_path")
-            if file_path:
-                await self._file_writer.write_file(file_path, result.get("code", ""))
-            
-            return TaskResult(
-                task_id=task.id,
-                status=TaskStatus.COMPLETED,
-                output=result
-            )
-            
+            # Get raw code from LLM without JSON wrapping
+            code = await self._llm_client.generate(prompt)
+            code = self._clean_code_response(code)
         except Exception as e:
+            self._logger.error("Generic code task failed", error=str(e))
             return TaskResult(
                 task_id=task.id,
                 status=TaskStatus.FAILED,
